@@ -1,0 +1,72 @@
+name: Probe enqueue
+
+# Calls `enqueuePullRequest` as the GitHub Actions installation, so the actor
+# GitHub evaluates against the rulesets is an Integration — the same actor type
+# a dedicated GitHub App would be. This is how the probe answers "can an
+# Integration that bypasses only the approval ruleset still be stopped by the
+# integrity ruleset?" without creating an App first.
+#
+# `expected_head` selects the race guard under test:
+#   live  - read the pull request head immediately before enqueueing
+#   stale - deliberately pass a wrong oid, which must be rejected
+#   <oid> - pass this oid verbatim
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number
+        required: true
+        type: string
+      expected_head:
+        description: live | stale | an explicit oid
+        required: false
+        default: live
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  enqueue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report the acting identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "::group::identity"
+          gh api user 2>&1 | head -5 || echo "gh api user is not available to an installation token"
+          gh api "repos/${GITHUB_REPOSITORY}" -q '.full_name'
+          echo "::endgroup::"
+
+      - name: Enqueue the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.pr }}
+          EXPECTED: ${{ inputs.expected_head }}
+        run: |
+          set -u
+          node_id=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}" -q '.node_id')
+          head=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}" -q '.head.sha')
+          case "${EXPECTED}" in
+            live)  expected="${head}" ;;
+            stale) expected="0000000000000000000000000000000000000001" ;;
+            *)     expected="${EXPECTED}" ;;
+          esac
+          echo "pr=${PR} node_id=${node_id} head=${head} expected=${expected}"
+
+          set +e
+          gh api graphql \
+            -f query='mutation($id:ID!,$oid:GitObjectID!){
+              enqueuePullRequest(input:{pullRequestId:$id, expectedHeadOid:$oid}){
+                mergeQueueEntry { id position state enqueuer { login } }
+              }
+            }' -F id="${node_id}" -F oid="${expected}" > out.json 2> err.txt
+          rc=$?
+          set -e
+          echo "exit_code=${rc}"
+          echo "-- stdout --"; cat out.json || true
+          echo "-- stderr --"; cat err.txt || true
+          exit "${rc}"

@@ -1,0 +1,4 @@
+# Probe fixture: exactly one owned path, so a pull request can be built that
+# has a code owner and one that has none. Everything else is deliberately
+# unowned.
+/owned/ @keting

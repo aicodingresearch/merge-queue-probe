@@ -1,0 +1,40 @@
+name: Probe check
+
+# The required status check context for the probe repository. It must report on
+# the pull request head as well as on the merge group, or GitHub refuses to
+# enqueue and refuses to merge respectively.
+#
+# A branch whose name starts with `fail/` makes the check fail, so a pull
+# request can be built whose required check is red without touching anything
+# else.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  merge_group:
+    types:
+      - checks_requested
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: probe
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decide the conclusion from the head branch name
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          echo "event=${EVENT_NAME} head_ref=${HEAD_REF}"
+          case "${HEAD_REF}" in
+            fail/*)
+              echo "probe check fails on purpose for ${HEAD_REF}"
+              exit 1
+              ;;
+          esac
+          echo "probe check passes"
