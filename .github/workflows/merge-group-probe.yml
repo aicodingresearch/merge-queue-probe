@@ -14,6 +14,9 @@ jobs:
     name: probe
     runs-on: ubuntu-latest
     steps:
+      - name: YAML SOURCE MARKER
+        run: echo "YAML_CAME_FROM_THE_PR_BRANCH_NOT_MAIN"
+
       - name: Report the merge group event fields
         env:
           MERGE_GROUP: ${{ toJSON(github.event.merge_group) }}
