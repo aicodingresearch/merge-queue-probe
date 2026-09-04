@@ -1,0 +1,80 @@
+name: Merge group probe
+
+on:
+  merge_group:
+    types:
+      - checks_requested
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  probe:
+    name: probe
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report the merge group event fields
+        env:
+          MERGE_GROUP: ${{ toJSON(github.event.merge_group) }}
+          EVENT_NAME: ${{ github.event_name }}
+          GITHUB_SHA_CTX: ${{ github.sha }}
+          GITHUB_REF_CTX: ${{ github.ref }}
+        run: |
+          echo "::group::event fields"
+          echo "event_name=${EVENT_NAME}"
+          echo "github.sha=${GITHUB_SHA_CTX}"
+          echo "github.ref=${GITHUB_REF_CTX}"
+          printf '%s' "$MERGE_GROUP" | jq '{head_sha, head_ref, base_sha, base_ref, head_commit_id: .head_commit.id, head_commit_tree_id: .head_commit.tree_id, head_commit_message: .head_commit.message}'
+          echo "::endgroup::"
+
+      - name: Report commit topology
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+          BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: |
+          echo "::group::commit topology"
+          echo "-- parents of merge group head --"
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}" \
+            -q '{sha, message: .commit.message, parents: [.parents[].sha]}' || echo "PARENTS_LOOKUP_FAILED"
+          echo "-- base_sha commit --"
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${BASE_SHA}" \
+            -q '{sha, message: .commit.message, parents: [.parents[].sha]}' || echo "BASE_LOOKUP_FAILED"
+          echo "-- current main --"
+          gh api "repos/${GITHUB_REPOSITORY}/commits/main" -q '{sha, message: .commit.message}' || echo "MAIN_LOOKUP_FAILED"
+          echo "::endgroup::"
+
+      - name: Read the merge queue over GraphQL
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "::group::graphql mergeQueue"
+          set +e
+          gh api graphql -f query='
+            query($owner:String!,$name:String!){
+              repository(owner:$owner,name:$name){
+                mergeQueue(branch:"main"){
+                  id
+                  configuration { mergeMethod maximumEntriesToBuild maximumEntriesToMerge minimumEntriesToMerge checkResponseTimeout }
+                  entries(first:50){
+                    totalCount
+                    nodes {
+                      position
+                      state
+                      solo
+                      enqueuedAt
+                      headCommit { oid }
+                      baseCommit { oid }
+                      pullRequest { number headRefOid state }
+                    }
+                  }
+                }
+              }
+            }' -F owner="${GITHUB_REPOSITORY%/*}" -F name="${GITHUB_REPOSITORY#*/}" > graphql.json 2> graphql.err
+          rc=$?
+          set -e
+          echo "graphql_exit_code=${rc}"
+          if [ -s graphql.err ]; then echo "-- stderr --"; sed -e 's/[A-Za-z0-9_]\{20,\}/<redacted>/g' graphql.err; fi
+          if [ -s graphql.json ]; then echo "-- response --"; jq '.' graphql.json; fi
+          echo "::endgroup::"
